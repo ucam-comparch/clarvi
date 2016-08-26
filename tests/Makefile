@@ -1,0 +1,153 @@
+# Copyright (c) 2016, Robert Eady
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+#    list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+# ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+# SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+#=======================================================================
+# Makefile for riscv-tests/isa
+#
+# Modified for clarvi by Jamie Wood, Rob Eady
+#-----------------------------------------------------------------------
+
+# Set this to the correct directory for your risc-v toolchain installation
+src_dir := riscv-tools/riscv-tests/isa
+
+#include $(src_dir)/rv64ui/Makefrag
+#include $(src_dir)/rv64um/Makefrag
+#include $(src_dir)/rv64ua/Makefrag
+#include $(src_dir)/rv64uf/Makefrag
+#include $(src_dir)/rv64ud/Makefrag
+#include $(src_dir)/rv64si/Makefrag
+#include $(src_dir)/rv64mi/Makefrag
+include $(src_dir)/rv32ui/Makefrag
+#include $(src_dir)/rv32um/Makefrag
+#include $(src_dir)/rv32ua/Makefrag
+#include $(src_dir)/rv32si/Makefrag
+include $(src_dir)/rv32mi/Makefrag
+
+default: all
+
+#--------------------------------------------------------------------
+# Build rules
+#--------------------------------------------------------------------
+
+XLEN = 32
+
+RISCV_PREFIX ?= riscv$(XLEN)-unknown-elf-
+RISCV_GCC ?= $(RISCV_PREFIX)gcc
+ENTROPY ?= -DENTROPY=$(shell echo $$$$)
+RISCV_GCC_OPTS ?= $(ENTROPY) -static -mcmodel=medany -fvisibility=hidden -nostdlib -nostartfiles
+RISCV_OBJDUMP ?= $(RISCV_PREFIX)objdump --disassemble-all --disassemble-zeroes --section=.text --section=.text.startup --section=.text.init --section=.data
+RISCV_OBJCOPY = $(RISCV_PREFIX)objcopy
+RISCV_SIM ?= spike
+
+vpath %.S $(src_dir)
+
+#------------------------------------------------------------
+# Build assembly tests
+
+%.mem.txt: %.mem
+	hexdump -v -e '"%08x\n"' $< > $@
+
+%.mem.hex: %.mem.txt
+	python txt2hex.py $< $@ 4
+
+#img:
+#	mkdir -p img
+
+%.mem: %
+	$(RISCV_OBJCOPY) -O binary --only-section=.data* --only-section=.text* $< $@
+
+
+%.dump: %
+	$(RISCV_OBJDUMP) $< > $@
+
+%.out: %
+	$(RISCV_SIM) $< 2> $@
+
+%.out32: %
+	$(RISCV_SIM) --isa=RV32 $< 2> $@
+
+define compile_template
+
+$$($(1)_p_tests): $(1)-p-%: $(1)/%.S
+	$$(RISCV_GCC) $(2) $$(RISCV_GCC_OPTS) -I$(src_dir)/../env/p -I$(src_dir)/macros/scalar -Tlink.ld $$< -o $$@
+$(1)_tests += $$($(1)_p_tests)
+
+# $$($(1)_v_tests): $(1)-v-%: $(1)/%.S
+# 	$$(RISCV_GCC) $(2) $$(RISCV_GCC_OPTS) -std=gnu99 -O2 -I$(src_dir)/../env/v -I$(src_dir)/macros/scalar -T$(src_dir)/../env/v/link.ld $(src_dir)/../env/v/entry.S $(src_dir)/../env/v/*.c $$< -lc -o $$@
+# $(1)_tests += $$($(1)_v_tests)
+
+# baremetal tests that don't use privileged instructions in initialisation
+$$($(1)_b_tests): $(1)-b-%: $(1)/%.S
+	$$(RISCV_GCC) $(2) $$(RISCV_GCC_OPTS) -Ienv/b -I$(src_dir)/macros/scalar -Tlink.ld $$< -o $$@
+$(1)_tests += $$($(1)_b_tests)
+
+$(1)_tests_dump = $$(addsuffix .dump, $$($(1)_tests))
+
+$(1): $$($(1)_tests_dump)
+
+.PHONY: $(1)
+
+tests += $$($(1)_tests)
+
+endef
+
+$(eval $(call compile_template,rv32ui,-m32))
+# $(eval $(call compile_template,rv32um,-m32))
+# $(eval $(call compile_template,rv32ua,-m32))
+# $(eval $(call compile_template,rv32si,-m32))
+$(eval $(call compile_template,rv32mi,-m32))
+ifeq ($(XLEN),64)
+$(eval $(call compile_template,rv64ui))
+$(eval $(call compile_template,rv64um))
+$(eval $(call compile_template,rv64ua))
+$(eval $(call compile_template,rv64uf))
+$(eval $(call compile_template,rv64ud))
+$(eval $(call compile_template,rv64si))
+$(eval $(call compile_template,rv64mi))
+endif
+
+tests_dump = $(addsuffix .dump, $(tests))
+tests_hex = $(addsuffix .hex, $(tests))
+tests_out = $(addsuffix .out, $(spike_tests))
+tests32_out = $(addsuffix .out32, $(spike32_tests))
+
+tests_mem_txt = $(addsuffix .mem.txt, $(tests))
+tests_mem_hex = $(addsuffix .mem.hex, $(tests))
+tests_mem_ver = $(addsuffix .mem.ver, $(tests)) # generated by the testbench
+
+run: $(tests_out) $(tests32_out)
+	echo; perl -ne 'print "  [$$1] $$ARGV \t$$2\n" if /\*{3}(.{8})\*{3}(.*)/' \
+	       $(tests_out) $(tests32_out); echo;
+
+junk += $(tests) $(tests_dump) $(tests_hex) $(tests_out) $(tests32_out) img $(tests_mem_hex) $(tests_mem_txt) $(tests_mem_ver)
+
+#------------------------------------------------------------
+# Default
+
+all: $(tests_dump) $(tests_mem_hex) $(tests_mem_txt)
+
+#------------------------------------------------------------
+# Clean up
+
+clean:
+	rm -rf $(junk)
