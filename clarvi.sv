@@ -25,8 +25,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /*******************************************************************************
 
-The processor has a 5 stage pipeline, with pipeline registers between stages.
-Technically instruction fetch takes two cycles.
+The processor has a 6 stage pipeline, with pipeline registers between stages.
+Instruction fetch takes two cycles.
 
 Note that memory accesses are submitted in the execute stage and loaded values
 aligned in the memory align stage. Branches are performed in the execute stage.
