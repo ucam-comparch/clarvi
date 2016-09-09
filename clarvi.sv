@@ -301,8 +301,10 @@ module clarvi #(
     // === Write Back ==========================================================
 
     always_ff @(posedge clock) begin
-        if (!stall_for_memory && ma_wb_instr.enable_wb && !ma_wb_invalid) begin
-            registers[ma_wb_instr.rd] <= ma_wb_value;
+        if (!stall_for_memory && !ma_wb_invalid) begin
+            if (ma_wb_instr.enable_wb) begin
+                registers[ma_wb_instr.rd] <= ma_wb_value;
+            end
             instret <= instret + 1;
         end
     end
