@@ -69,10 +69,7 @@ $(BUILD)/mem.hex: $(BUILD)/mem.txt
 
 # make software project folder
 dirs:
-	if [ ! -d $(BUILD) ]; then \
-		mkdir $(BUILD); \
-	fi
-
+	mkdir -p $(BUILD)
 
 # update the memory files inside the FPGA bitfile
 update-mem:	all
