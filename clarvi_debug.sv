@@ -31,7 +31,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
                 CSRRW, CSRRS, CSRRC:
                     // catch writes to dscratch and output them
                     if (ex_ma_instr.funct12 == DSCRATCH)
-                        $display("Debug output: %h", dscratch);
+                        $display("Debug output: %s = 0x%h", ex_ma_instr.rs1, dscratch);
             endcase
         end
 
@@ -86,15 +86,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
         // write the destination register assignment to a string
         if (db_instr.enable_wb)
-            register_result = $sformatf("%s := %h", db_instr.rd, db_result);
+            register_result = $sformatf("%s := 0x%h", db_instr.rd, db_result);
 
         // write the source register values to a string
         if (db_instr.rs1_used && db_instr.rs2_used)
-            register_values = $sformatf("%s = %h, %s = %h", db_instr.rs1, db_rs1_value, db_instr.rs2, db_rs2_value);
+            register_values = $sformatf("%s = 0x%h, %s = 0x%h", db_instr.rs1, db_rs1_value, db_instr.rs2, db_rs2_value);
         else if (db_instr.rs1_used)
-            register_values = $sformatf("%s = %h", db_instr.rs1, db_rs1_value);
+            register_values = $sformatf("%s = 0x%h", db_instr.rs1, db_rs1_value);
         else if (db_instr.rs2_used)
-            register_values = $sformatf("%s = %h", db_instr.rs2, db_rs2_value);
+            register_values = $sformatf("%s = 0x%h", db_instr.rs2, db_rs2_value);
 
         // for each kind of instruction, output an appropriate trace, perhaps using the source/designation register strings from above.
         case (db_instr.op)
@@ -109,8 +109,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             end
             BEQ, BNE, BLT, BGE, BLTU, BGEU:
                 $write("%s\t%s, %s, 0x%h\t%s, branch %s", db_instr.op, db_instr.rs1, db_instr.rs2, db_branch_target, register_values, db_branch_taken ? "taken" : "not taken");
-            LOAD:  $write("L%s%s\t%s, %0d(%s)\t\t%s = mem[%h], %s",  db_instr.memory_width, db_instr.memory_read_unsigned ? "U" : "", db_instr.rd,  $signed(db_instr.immediate), db_instr.rs1, register_result, db_mem_address, register_values);
-            STORE: $write("S%s\t%s, %0d(%s)\t\tmem[%h] := %h, %s",  db_instr.memory_width, db_instr.rs2, $signed(db_instr.immediate), db_instr.rs1, db_mem_address, db_rs2_value, register_values);
+            LOAD:  $write("L%s%s\t%s, %0d(%s)\t\t%s = mem[0x%h], %s",  db_instr.memory_width, db_instr.memory_read_unsigned ? "U" : "", db_instr.rd,  $signed(db_instr.immediate), db_instr.rs1, register_result, db_mem_address, register_values);
+            STORE: $write("S%s\t%s, %0d(%s)\t\tmem[%h] := 0x%h, %s",  db_instr.memory_width, db_instr.rs2, $signed(db_instr.immediate), db_instr.rs1, db_mem_address, db_rs2_value, register_values);
             ECALL, EBREAK, MRET, WFI, FENCE, FENCE_I:
                 $write("%s", db_instr.op);
             CSRRW, CSRRS, CSRRC:
