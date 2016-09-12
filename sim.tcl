@@ -33,6 +33,7 @@ if {$argc == 2} {
 
 vlog clarvi_avalon.sv
 vlog bram.sv
+vlog sim.sv
 
 if {$argc > 0} {
     vsim work.clarvi_sim -GINIT_FILE=$1 -t ns -voptargs=+acc=npr
