@@ -226,6 +226,7 @@ module clarvi #(
     end
 
     always_ff @(posedge clock) begin
+        $display("time: %0d, main memory read enable: %0d", $time, main_read_enable);
         if (!stall_for_memory) begin
             ex_ma_instr       <= de_ex_instr;
             ex_ma_result      <= ex_result;
@@ -283,10 +284,15 @@ module clarvi #(
 
     instr_t ma_wb_instr;
     logic[31:0] ma_result, ma_load_value, ma_wb_value;
+    logic[31:0] main_read_data_buffer;
+    logic ma_stall_on_prev;
 
     always_comb begin
-        // align the loaded value
-        ma_load_value = load_shift_mask_extend(ex_ma_instr.memory_width, ex_ma_instr.memory_read_unsigned, main_read_data, ex_ma_word_offset);
+        // align the loaded value: if we stalled on last cycle then take buffered data instead
+        ma_load_value = load_shift_mask_extend(ex_ma_instr.memory_width,
+                                               ex_ma_instr.memory_read_unsigned,
+                                               ma_stall_on_prev ? main_read_data_buffer : main_read_data,
+                                               ex_ma_word_offset);
         // if this isn't a load instruction, pass through the ALU result instead
         ma_result = ex_ma_instr.memory_read ? ma_load_value : ex_ma_result;
     end
@@ -296,6 +302,11 @@ module clarvi #(
             ma_wb_instr <= ex_ma_instr;
             ma_wb_value <= ma_result;
         end
+        //buffer the data returned from the last request before a stall
+        if (!ma_stall_on_prev) begin
+            main_read_data_buffer <= main_read_data;
+        end
+        ma_stall_on_prev <= stall_for_memory;
     end
 
     // === Write Back ==========================================================
@@ -315,7 +326,7 @@ module clarvi #(
     register_t de_rs1, de_rs2;
 
     always_comb begin
-        // check if stages are elligable to have their values forwarded
+        // check if stages are eligible to have their values forwarded
         // forward from EX result: instruction must not be a load since result won't be ready until end of MA stage
         could_forward_from_ex = !de_ex_invalid && de_ex_instr.enable_wb && !de_ex_instr.memory_read;
         could_forward_from_ma = !ex_ma_invalid && ex_ma_instr.enable_wb;
