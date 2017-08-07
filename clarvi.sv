@@ -55,8 +55,8 @@ e.g. de_ex_instr is a DE/EX pipeline register storing the decoded instruction.
 Combination signals are prefixed with the stage they are used in,
 e.g. ex_result is output of the ALU in the execute stage.
 
-Although we support the readdatavalid signal used by variable latency pipelined
-slaves, the core is only designed for memory with a fixed 1-cycle read latency.
+The core only supports single cycle latency instruction memory.
+Main memory can have arbitrary (>= 1 cycle) latency.
 
 *******************************************************************************/
 
@@ -85,6 +85,7 @@ module clarvi #(
     output logic [3:0]  main_byte_enable,
     output logic        main_read_enable,
     input  logic [31:0] main_read_data,
+    input  logic        main_read_data_valid,
     output logic        main_write_enable,
     output logic [31:0] main_write_data,
     input  logic        main_wait,
@@ -121,6 +122,12 @@ module clarvi #(
 
     // traps caused by the instruction being fetched or executed
     logic interrupt, if_exception, ex_exception, ex_mem_address_error;
+    
+    logic main_read_pending; //whether we have sent a memory read which has not yet been replied to
+    
+    // buffer to hold the last valid main memory read response: valid is set iff this data has not yet been used by MA
+    logic[31:0] main_read_data_buffer;
+    logic main_read_data_buffer_valid;
 
     // Stage invalidation flags
     logic if_invalid = 1;
@@ -129,9 +136,24 @@ module clarvi #(
     logic ex_ma_invalid = 1;
     logic ma_wb_invalid = 1;
 
-    logic stall_for_memory;   // stall everything when main memory isn't ready for load/store/IF
+    logic stall_for_memory_wait;   // stall everything when main memory or instruction memory isn't ready for load/store/IF
     logic stall_for_load_dep; // stall IF, DE and repeat EX for a load followed by dependent instruction
-
+    logic stall_for_memory_pending; //stall IF, DE and EX when a read request is late being answered
+    
+    // distribute stall signals to each stage:
+    logic stall_if;
+    logic stall_de;
+    logic stall_ex;
+    logic stall_ma;
+    logic stall_wb;
+    
+    always_comb begin
+        stall_if = stall_for_memory_wait || stall_for_memory_pending || stall_for_load_dep;
+        stall_de = stall_for_memory_wait || stall_for_memory_pending || stall_for_load_dep;
+        stall_ex = stall_for_memory_wait || stall_for_memory_pending;
+        stall_ma = stall_for_memory_wait;
+        stall_wb = stall_for_memory_wait;
+    end
 
     // === Instruction Fetch ===================================================
 
@@ -148,11 +170,11 @@ module clarvi #(
 
     always_ff @(posedge clock) begin
         // buffer the last instruction read before a stall.
-        if_stall_on_prev <= stall_for_memory || stall_for_load_dep;
+        if_stall_on_prev <= stall_if;
         if (!if_stall_on_prev)
             instr_read_data_buffer <= instr_read_data;
 
-        if (!stall_for_memory && !stall_for_load_dep) begin
+        if (!stall_if) begin
             // if there was a stall on the last cycle, we read from the instruction buffer not the bus.
             // this allows the PC to 'catch up' on the next cycle.
             if_de_instr <= if_stall_on_prev ? instr_read_data_buffer : instr_read_data;
@@ -183,13 +205,15 @@ module clarvi #(
 
         // ignore waitrequest unless we are actually reading/writing memory,
         // because the bus is allowed to hold waitrequest high while idle.
-        stall_for_memory = instr_wait && instr_read_enable
-                        || main_wait && (main_read_enable || main_write_enable);
+        stall_for_memory_wait = (instr_wait && instr_read_enable)
+                                || (main_wait && (main_read_enable || main_write_enable));
+                                
+        stall_for_memory_pending = main_read_pending && !main_read_data_buffer_valid && !main_read_data_valid;
 
     end
 
     always_ff @(posedge clock) begin
-        if (!stall_for_memory && !stall_for_load_dep) begin
+        if (!stall_de) begin
             de_ex_instr <= de_instr;
             // if the value isn't forwarded, these take the register fetch results.
             de_ex_rs1_value <= de_rs1_forward;
@@ -209,8 +233,8 @@ module clarvi #(
 
         // --- Memory Access ---------------------------------------------------
 
-        main_read_enable  = !de_ex_invalid && !interrupt && !ex_mem_address_error && de_ex_instr.memory_read;
-        main_write_enable = !de_ex_invalid && !interrupt && !ex_mem_address_error && de_ex_instr.memory_write;
+        main_read_enable  = !de_ex_invalid && !interrupt && !ex_mem_address_error && de_ex_instr.memory_read && !stall_for_memory_pending;
+        main_write_enable = !de_ex_invalid && !interrupt && !ex_mem_address_error && de_ex_instr.memory_write && !stall_for_memory_pending;
 
         // do address calculation
         ex_mem_address = de_ex_rs1_value + de_ex_instr.immediate;
@@ -226,11 +250,11 @@ module clarvi #(
     end
 
     always_ff @(posedge clock) begin
-        $display("time: %0d, main memory read enable: %0d", $time, main_read_enable);
-        if (!stall_for_memory) begin
+        if (!stall_ex) begin
             ex_ma_instr       <= de_ex_instr;
             ex_ma_result      <= ex_result;
             ex_ma_word_offset <= ex_word_offset;
+            main_read_pending <= main_read_enable;
         end
     end
 
@@ -242,10 +266,10 @@ module clarvi #(
     always_comb begin
         ex_branch_taken = !de_ex_invalid && is_branch_taken(de_ex_instr.op, de_ex_rs1_value, de_ex_rs2_value);
         ex_branch_target = target_pc(de_ex_instr, de_ex_rs1_value);
-        ex_next_pc = ex_branch_taken ? ex_branch_target : pc + 4;
+        ex_next_pc = ex_branch_taken ? ex_branch_target : pc + 4; //note that pc + 4 is actually a prediction for 3 instructions' time
     end
 
-    always_ff @(posedge clock) begin
+    always_ff @(posedge clock or posedge reset)
         if (reset) begin
             pc <= INITIAL_PC;
             if_invalid <= 1;
@@ -253,66 +277,71 @@ module clarvi #(
             de_ex_invalid <= 1;
             ex_ma_invalid <= 1;
             ma_wb_invalid <= 1;
+            main_read_pending <= 0;
+            main_read_data_buffer_valid <= 0;
         end else begin
             // don't update the program counter if we're stalling
-            if (!stall_for_memory && !stall_for_load_dep)
+            if (!stall_if) begin
                 // if a trap is taken, go to the handler instead
                 pc <= (if_exception || ex_exception) ? mtvec : ex_next_pc;
 
-            // logic for stage invalidation upon taking a branch or stalling
-            // don't change anything if the pipeline is stalled accessing memory
-            if (!stall_for_memory) begin
-                if (!stall_for_load_dep) begin
-                    // invalidate on any exception, interrupt or branch.
-                    if_invalid <= interrupt || ex_exception || if_exception || ex_branch_taken;
-                    // invalidate on an EX exception, interrupt or branch.
-                    // an IF exception can only happen after a branch so this stage would already be invalid.
-                    if_de_invalid <= if_invalid || interrupt || ex_exception || ex_branch_taken;
-                end
-                // invalidate in an EX exception, interrupt, branch or load dependency stall.
+                // logic for stage invalidation upon taking a branch or stalling
+                // don't change the registers if the corresponding stage is stalled
+            
+                // invalidate on any exception, interrupt or branch.
+                if_invalid <= interrupt || ex_exception || if_exception || ex_branch_taken;
+                    
+                // invalidate on an EX exception, interrupt or branch.
                 // an IF exception can only happen after a branch so this stage would already be invalid.
-                de_ex_invalid <= if_de_invalid || interrupt || ex_exception || ex_branch_taken || stall_for_load_dep;
-                // invalidate on an interrupt or any EX exception that could be caused by an instruction that writes back.
-                // i.e. an exception on a load or an invalid instruction.
-                ex_ma_invalid <= de_ex_invalid || interrupt || ex_mem_address_error && de_ex_instr.memory_read || de_ex_instr.op == INVALID;
-                ma_wb_invalid <= ex_ma_invalid;
+                if_de_invalid <= if_invalid || interrupt || ex_exception || ex_branch_taken;
             end
+         
+            // invalidate in an EX exception, interrupt, branch or load dependency stall.
+            // an IF exception can only happen after a branch so this stage would already be invalid.
+            if (!stall_de)  de_ex_invalid <= if_de_invalid || interrupt || ex_exception || ex_branch_taken;
+            else if (!stall_ex) de_ex_invalid <= 1; // we only stall de but not ex on load dep, so insert a bubble
+            
+            // invalidate on an interrupt or any EX exception that could be caused by an instruction that writes back.
+            // i.e. an exception on a load or an invalid instruction.
+            if (!stall_ex)  ex_ma_invalid <= de_ex_invalid || interrupt || ex_mem_address_error && de_ex_instr.memory_read || de_ex_instr.op == INVALID;
+            // we only stall ex and not ma when memory pending, so replay (no bubble)
+            
+            if (!stall_ma)  ma_wb_invalid <= ex_ma_invalid;
         end
-    end
 
     // === Memory Align ========================================================
 
     instr_t ma_wb_instr;
     logic[31:0] ma_result, ma_load_value, ma_wb_value;
-    logic[31:0] main_read_data_buffer;
-    logic ma_stall_on_prev;
 
     always_comb begin
         // align the loaded value: if we stalled on last cycle then take buffered data instead
         ma_load_value = load_shift_mask_extend(ex_ma_instr.memory_width,
                                                ex_ma_instr.memory_read_unsigned,
-                                               ma_stall_on_prev ? main_read_data_buffer : main_read_data,
+                                               main_read_data_valid ? main_read_data : main_read_data_buffer,
                                                ex_ma_word_offset);
         // if this isn't a load instruction, pass through the ALU result instead
         ma_result = ex_ma_instr.memory_read ? ma_load_value : ex_ma_result;
     end
 
     always_ff @(posedge clock) begin
-        if (!stall_for_memory) begin
+        if (!stall_ma) begin
             ma_wb_instr <= ex_ma_instr;
             ma_wb_value <= ma_result;
+            main_read_data_buffer_valid <= 0;
+        end else begin
+            main_read_data_buffer_valid <= main_read_data_buffer_valid || main_read_data_valid;
         end
-        //buffer the data returned from the last request before a stall
-        if (!ma_stall_on_prev) begin
+        //buffer the last data returned in case of stall
+        if (main_read_data_valid) begin
             main_read_data_buffer <= main_read_data;
         end
-        ma_stall_on_prev <= stall_for_memory;
     end
 
     // === Write Back ==========================================================
 
     always_ff @(posedge clock) begin
-        if (!stall_for_memory && !ma_wb_invalid) begin
+        if (!stall_wb && !ma_wb_invalid) begin
             if (ma_wb_instr.enable_wb) begin
                 registers[ma_wb_instr.rd] <= ma_wb_value;
             end
@@ -400,29 +429,28 @@ module clarvi #(
             mstatus <= '0;
             mie <= '0;
         end
-        else if (!stall_for_memory && !stall_for_load_dep) begin
-            if (if_exception || ex_exception || interrupt) begin
-                // Entering a trap handler. Push 0 onto the mstatus interrupts-enabled stack
-                mstatus.mpie <= mstatus.mie;
-                mstatus.mie <= '0;
-                // record the address of the instruction that caused the trap or the instruction that got interrupted
-                mbadaddr <= trap_pc;
-                mepc <= trap_pc;
-                // set the trap cause
-                mcause <= get_trap_cause();
-            end
+        
+        if ((!stall_if && if_exception) || (!stall_ex && ex_exception) || interrupt) begin
+            // Entering a trap handler. Push 0 onto the mstatus interrupts-enabled stack
+            mstatus.mpie <= mstatus.mie;
+            mstatus.mie <= '0;
+            // record the address of the instruction that caused the trap or the instruction that got interrupted
+            mbadaddr <= trap_pc;
+            mepc <= trap_pc;
+            // set the trap cause
+            mcause <= get_trap_cause();
+         end
 
-            if (!de_ex_invalid && de_ex_instr.op == MRET) begin
-                // Returning from trap handler. Pop the mstatus interrupts-enabled stack.
-                mstatus.mie <= mstatus.mpie;
-                mstatus.mpie <= '1;
-            end
+         if (!stall_ex && !de_ex_invalid && de_ex_instr.op == MRET) begin
+            // Returning from trap handler. Pop the mstatus interrupts-enabled stack.
+            mstatus.mie <= mstatus.mpie;
+            mstatus.mpie <= '1;
+         end
 
-            // Do CSR write/set/clear operations if we are executing a CSR instruction
-            if (!de_ex_invalid && !interrupt)
-                // CSR operations can't cause a trap because they decode into INVALID instead
-                execute_csr(de_ex_instr, de_ex_rs1_value);
-        end
+         // Do CSR write/set/clear operations if we are executing a CSR instruction
+         if (!stall_ex && !de_ex_invalid && !interrupt)
+            // CSR operations can't cause a trap because they decode into INVALID instead
+            execute_csr(de_ex_instr, de_ex_rs1_value);
     end
 
 `else

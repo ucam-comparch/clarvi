@@ -72,23 +72,24 @@ module clarvi_avalon #(
         .INITIAL_PC(INITIAL_PC),
         .DEFAULT_TRAP_VECTOR(DEFAULT_TRAP_VECTOR)
     ) clarvi (
-        .main_address      (avm_main_address),
-        .main_byte_enable  (avm_main_byteenable),
-        .main_read_enable  (avm_main_read),
-        .main_read_data    (avm_main_readdata),
-        .main_write_enable (avm_main_write),
-        .main_write_data   (avm_main_writedata),
-        .main_wait         (avm_main_waitrequest),
-        .instr_address     (avm_instr_address),
-        .instr_read_enable (avm_instr_read),
-        .instr_read_data   (avm_instr_readdata),
-        .instr_wait        (avm_instr_waitrequest),
-        .clock             (clock),
-        .reset             (reset),
-        .inr_irq           (inr_irq),
-        .debug_register28  (debug_register28),
-        .debug_scratch     (debug_scratch),
-        .debug_pc          (debug_pc)
+        .main_address          (avm_main_address),
+        .main_byte_enable      (avm_main_byteenable),
+        .main_read_enable      (avm_main_read),
+        .main_read_data        (avm_main_readdata),
+        .main_read_data_valid  (avm_main_readdatavalid),
+        .main_write_enable     (avm_main_write),
+        .main_write_data       (avm_main_writedata),
+        .main_wait             (avm_main_waitrequest),
+        .instr_address         (avm_instr_address),
+        .instr_read_enable     (avm_instr_read),
+        .instr_read_data       (avm_instr_readdata),
+        .instr_wait            (avm_instr_waitrequest),
+        .clock                 (clock),
+        .reset                 (reset),
+        .inr_irq               (inr_irq),
+        .debug_register28      (debug_register28),
+        .debug_scratch         (debug_scratch),
+        .debug_pc              (debug_pc)
     );
 
 endmodule

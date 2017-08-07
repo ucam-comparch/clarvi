@@ -26,9 +26,7 @@ The processor has a 6-stage pipeline, which is similar to the classic RISC pipel
 
 The core has a generic memory interface, with separate instruction and data ports. These could be connected to the same or different memories. Be sure to configure the `ADDR_WIDTH` parameters appropriately for the amount of memory attached - accesses beyond this address width will raise access faults. Note that this is the **word** address width. All memory bus addresses are word not byte addresses.
 
-The included `clarvi_avalon` component is a wrapper which exposes an Altera Avalon MM interface. Although it includes the `readdatavalid` signal, the core expects memory with a fixed single cycle latency. It does however support the use of the `wait` signal when there is contention on the memory bus.
-
-To attach memory with a longer or variable latency, a wrapper component should be created which uses the core's `wait` signal to stall it when memory access will have a latency of more than 1 cycle. The `wait` signal is expected to behave like the Avalon MM `waitrequest` signal.
+The included `clarvi_avalon` component is a wrapper which exposes an Altera Avalon MM interface. The core supports a main memory with variable latency, allowing for both the `wait` and `readdatavalid` signals as specified by the Avalon MM interface.
 
 
 ## Performance
