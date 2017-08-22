@@ -123,11 +123,11 @@ module clarvi #(
     // traps caused by the instruction being fetched or executed
     logic interrupt, if_exception, ex_exception, ex_mem_address_error;
     
-    logic main_read_pending; //whether we have sent a memory read which has not yet been replied to
+    logic main_read_pending = 0; //whether we have sent a memory read which has not yet been replied to
     
     // buffer to hold the last valid main memory read response: valid is set iff this data has not yet been used by MA
     logic[31:0] main_read_data_buffer;
-    logic main_read_data_buffer_valid;
+    logic main_read_data_buffer_valid = 0;
 
     // Stage invalidation flags
     logic if_invalid = 1;
@@ -249,14 +249,17 @@ module clarvi #(
         main_write_data = de_ex_rs2_value << ex_word_offset*8;
     end
 
-    always_ff @(posedge clock) begin
-        if (!stall_ex) begin
-            ex_ma_instr       <= de_ex_instr;
-            ex_ma_result      <= ex_result;
-            ex_ma_word_offset <= ex_word_offset;
-            main_read_pending <= main_read_enable;
+    always_ff @(posedge clock)
+        if (reset) begin
+            main_read_pending <= 0;
+        end else begin
+            if (!stall_ex) begin
+                ex_ma_instr       <= de_ex_instr;
+                ex_ma_result      <= ex_result;
+                ex_ma_word_offset <= ex_word_offset;
+                main_read_pending <= main_read_enable;
+            end
         end
-    end
 
     // === Branching or Reset ==================================================
 
@@ -269,7 +272,7 @@ module clarvi #(
         ex_next_pc = ex_branch_taken ? ex_branch_target : pc + 4; //note that pc + 4 is actually a prediction for 3 instructions' time
     end
 
-    always_ff @(posedge clock or posedge reset)
+    always_ff @(posedge clock)
         if (reset) begin
             pc <= INITIAL_PC;
             if_invalid <= 1;
@@ -277,16 +280,13 @@ module clarvi #(
             de_ex_invalid <= 1;
             ex_ma_invalid <= 1;
             ma_wb_invalid <= 1;
-            main_read_pending <= 0;
-            main_read_data_buffer_valid <= 0;
         end else begin
-            // don't update the program counter if we're stalling
+            // logic for stage invalidation upon taking a branch or stalling
+            // don't change the registers if the corresponding stage is stalled
+            
             if (!stall_if) begin
                 // if a trap is taken, go to the handler instead
                 pc <= (if_exception || ex_exception) ? mtvec : ex_next_pc;
-
-                // logic for stage invalidation upon taking a branch or stalling
-                // don't change the registers if the corresponding stage is stalled
             
                 // invalidate on any exception, interrupt or branch.
                 if_invalid <= interrupt || ex_exception || if_exception || ex_branch_taken;
@@ -304,9 +304,10 @@ module clarvi #(
             // invalidate on an interrupt or any EX exception that could be caused by an instruction that writes back.
             // i.e. an exception on a load or an invalid instruction.
             if (!stall_ex)  ex_ma_invalid <= de_ex_invalid || interrupt || ex_mem_address_error && de_ex_instr.memory_read || de_ex_instr.op == INVALID;
-            // we only stall ex and not ma when memory pending, so replay (no bubble)
+            // we only stall ex and not ma when memory pending, so replay (no bubble here)
             
-            if (!stall_ma)  ma_wb_invalid <= ex_ma_invalid;
+            // if ma received invalid data, insert a bubble into wb
+            if (!stall_ma)  ma_wb_invalid <= ex_ma_invalid || stall_for_memory_pending;
         end
 
     // === Memory Align ========================================================
@@ -324,19 +325,22 @@ module clarvi #(
         ma_result = ex_ma_instr.memory_read ? ma_load_value : ex_ma_result;
     end
 
-    always_ff @(posedge clock) begin
-        if (!stall_ma) begin
-            ma_wb_instr <= ex_ma_instr;
-            ma_wb_value <= ma_result;
+    always_ff @(posedge clock)
+        if (reset) begin
             main_read_data_buffer_valid <= 0;
         end else begin
-            main_read_data_buffer_valid <= main_read_data_buffer_valid || main_read_data_valid;
+            if (!stall_ma) begin
+                  ma_wb_instr <= ex_ma_instr;
+                  ma_wb_value <= ma_result;
+                  main_read_data_buffer_valid <= 0;
+            end else begin
+                  main_read_data_buffer_valid <= main_read_data_buffer_valid || main_read_data_valid;
+            end
+            //buffer the last data returned in case of stall
+            if (main_read_data_valid) begin
+                  main_read_data_buffer <= main_read_data;
+            end
         end
-        //buffer the last data returned in case of stall
-        if (main_read_data_valid) begin
-            main_read_data_buffer <= main_read_data;
-        end
-    end
 
     // === Write Back ==========================================================
 
@@ -446,7 +450,7 @@ module clarvi #(
             mstatus.mie <= mstatus.mpie;
             mstatus.mpie <= '1;
          end
-
+         
          // Do CSR write/set/clear operations if we are executing a CSR instruction
          if (!stall_ex && !de_ex_invalid && !interrupt)
             // CSR operations can't cause a trap because they decode into INVALID instead

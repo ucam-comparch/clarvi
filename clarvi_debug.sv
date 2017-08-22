@@ -26,7 +26,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
    always_ff @(posedge clock) begin
         // it is most convenient to catch instructions in the MA stage.
-        if (!ex_ma_invalid) begin
+        if (!ex_ma_invalid && !stall_wb) begin
             case (ex_ma_instr.op)
                 CSRRW, CSRRS, CSRRC:
                     // catch writes to dscratch and output them
@@ -37,10 +37,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
         // However, if we are going to stop the simulator, it is better to catch instructions
         // in the WB stage so that the preceeding instruction will have written back and retired.
-        if (!ma_wb_invalid) begin
+        if (!ma_wb_invalid && !stall_wb) begin
             case (ma_wb_instr.op)
                 ECALL, INVALID: begin
-                    $display("%s instruction at %h, stopping simulator", ma_wb_instr.op, ma_wb_instr.pc);
+                    $display("time: %0d, %p instruction at %h, stopping simulator", $time, ma_wb_instr, ma_wb_instr.pc);
                     $stop();
                 end
             endcase
@@ -55,12 +55,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
     always_comb begin
         db_instr = ex_ma_instr;
-        db_invalid = ex_ma_invalid;
+        db_invalid = ex_ma_invalid || stall_ma;
         db_result = ma_result;
     end
 
     always_ff @(posedge clock) begin
-        if (!stall_for_memory) begin
+        if (!stall_ma) begin
             db_rs1_value <= de_ex_rs1_value;
             db_rs2_value <= de_ex_rs2_value;
             db_mem_address <= ex_mem_address;

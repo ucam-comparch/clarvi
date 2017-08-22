@@ -11,6 +11,7 @@ It passes all RV32I user-level tests, and the relevant RV32I machine-mode tests 
 There are minor deviations from the privileged specification:
 - On a branch to an invalid or misaligned address, an exception is only raised on the subsequent fetch, so any side effects of the branch (e.g. for JALR) are maintained.
   The specification is ambiguous on this matter, which causes the `ma_fetch` test to fail.
+- Misaligned loads and stores are not supported.
 - The `timecmp` register is implemented as a CSR rather than being memory mapped - its address can be found in `riscv.svh`.
 - The `dscratch` register is adopted as means of producing debug output.
 
@@ -27,6 +28,8 @@ The processor has a 6-stage pipeline, which is similar to the classic RISC pipel
 The core has a generic memory interface, with separate instruction and data ports. These could be connected to the same or different memories. Be sure to configure the `ADDR_WIDTH` parameters appropriately for the amount of memory attached - accesses beyond this address width will raise access faults. Note that this is the **word** address width. All memory bus addresses are word not byte addresses.
 
 The included `clarvi_avalon` component is a wrapper which exposes an Altera Avalon MM interface. The core supports a main memory with variable latency, allowing for both the `wait` and `readdatavalid` signals as specified by the Avalon MM interface.
+
+To attach instruction memory with a latency longer than 1 cycle, a wrapper component should be created which uses the core's `wait` signal to stall it when memory access will have a latency of more than 1 cycle. The `wait` signal is expected to behave like the Avalon MM `waitrequest` signal.
 
 
 ## Performance
